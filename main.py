@@ -19,6 +19,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Header per simulare un browser ed evitare i blocchi anti-bot da Render
+HEADERS_BROWSER = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Content-Type": "application/json"
+}
+
 def extract_clean_text(file_bytes: bytes, filename: str) -> str:
     """Estrae il testo ed elimina Indici/Sommari per evitare falsi positivi."""
     raw_text = ""
@@ -44,7 +51,7 @@ def extract_clean_text(file_bytes: bytes, filename: str) -> str:
         l = line.strip()
         if not l:
             continue
-        # Ignora righe dell'indice (punti sospensivi con numeri di pagina o parole chiave)
+        # Ignora righe dell'indice (punti sospensivi con numeri o parole chiave)
         if re.search(r'\.{2,}\s*\d+', l) or re.search(r'\.{4,}', l):
             continue
         if l.lower() in ["indice", "sommario", "table of contents", "executive summary"]:
@@ -102,7 +109,7 @@ async def analyze_option_a(file: UploadFile = File(...)):
     }
 
 # ==========================================
-# OPZIONE B: Analisi Semantica Gratis con ChatGPT (via Pollinations) + Matematica in Python
+# OPZIONE B: Analisi Semantica Gratis con Anti-Block Header & Fallback
 # ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
@@ -125,8 +132,8 @@ async def analyze_option_b(file: UploadFile = File(...)):
             "critical_passages": []
         }
 
-    # Analizziamo fino a 10 paragrafi significativi
-    sample_paragraphs = all_paragraphs[:10]
+    # Analizziamo fino a 8 paragrafi per rendere la risposta dell'AI più veloce
+    sample_paragraphs = all_paragraphs[:8]
     text_sample = "\n---\n".join(sample_paragraphs).replace('"', "'")
 
     prompt = f"""
@@ -153,22 +160,42 @@ async def analyze_option_b(file: UploadFile = File(...)):
     }}
     """
 
-    # Endpoint Pollinations che sfrutta i modelli OpenAI senza API Key
+    # Tentativo 1: Chiamata POST con User-Agent
     url = "https://text.pollinations.ai/"
     payload = {
         "messages": [
             {"role": "system", "content": "Sei un analista testuale accademico. Rispondi ESCLUSIVAMENTE con il JSON richiesto."},
             {"role": "user", "content": prompt}
         ],
-        "model": "openai", # Chiama gratuitamente il motore ChatGPT
+        "model": "openai",
         "seed": 42
     }
 
+    response_text = ""
     try:
-        response = requests.post(url, json=payload, timeout=45)
+        response = requests.post(url, json=payload, headers=HEADERS_BROWSER, timeout=30)
         response.raise_for_status()
         response_text = response.text.strip()
+    except Exception as e:
+        print(f"[LOG ERROR] Tentativo POST fallito: {e}")
+        # Tentativo 2: Fallback su modello Mistral se OpenAI è intasato
+        try:
+            payload["model"] = "mistral"
+            response = requests.post(url, json=payload, headers=HEADERS_BROWSER, timeout=30)
+            response.raise_for_status()
+            response_text = response.text.strip()
+        except Exception as e2:
+            print(f"[LOG ERROR] Tentativo Fallback Mistral fallito: {e2}")
+            return {
+                "mode": "Opzione B (Analisi Semantica & IA - Errore API)",
+                "plagiarism_score": -1,
+                "score": -1,
+                "risk_level": "Errore",
+                "summary_eval": "Il server AI remoto è temporaneamente non raggiungibile. Riprova tra poco.",
+                "critical_passages": []
+            }
 
+    try:
         start_idx = response_text.find('{')
         end_idx = response_text.rfind('}')
         
@@ -205,13 +232,13 @@ async def analyze_option_b(file: UploadFile = File(...)):
             "critical_passages": critical
         }
 
-    except Exception as e:
-        print(f"Errore chiamata AI: {e}")
+    except Exception as parse_err:
+        print(f"[LOG ERROR] Errore di decodifica JSON: {parse_err}")
         return {
-            "mode": "Opzione B (Analisi Semantica & IA - Errore API)",
+            "mode": "Opzione B (Analisi Semantica & IA - Errore Formato)",
             "plagiarism_score": -1,
             "score": -1,
             "risk_level": "Errore",
-            "summary_eval": f"Errore durante l'analisi AI: {str(e)[:60]}",
+            "summary_eval": "L'AI ha risposto ma con un formato invalido. Riprova la scansione.",
             "critical_passages": []
         }
