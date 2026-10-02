@@ -20,7 +20,6 @@ app.add_middleware(
 )
 
 def extract_clean_text(file_bytes: bytes, filename: str) -> str:
-    """Estrae il testo ed elimina Indici/Sommari per evitare falsi positivi."""
     raw_text = ""
     try:
         if filename.endswith(".docx"):
@@ -55,11 +54,8 @@ def extract_clean_text(file_bytes: bytes, filename: str) -> str:
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "message": "Backend Antiplagio Attivo e Operativo"}
+    return {"status": "online", "message": "Backend Active"}
 
-# ==========================================
-# OPZIONE A: Ricerca Reale Fonti Web (DuckDuckGo)
-# ==========================================
 @app.post("/analyze/search")
 async def analyze_option_a(file: UploadFile = File(...)):
     contents = await file.read()
@@ -100,9 +96,6 @@ async def analyze_option_a(file: UploadFile = File(...)):
         "matches": matches
     }
 
-# ==========================================
-# OPZIONE B: Analisi Semantica Google Gemini REST
-# ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
     contents = await file.read()
@@ -111,98 +104,77 @@ async def analyze_option_b(file: UploadFile = File(...)):
     if not full_text:
         raise HTTPException(status_code=400, detail="Impossibile estrarre testo dal file.")
 
-    gemini_key = os.getenv("GEMINI_API_KEY")
+    # Legge la chiave
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not gemini_key:
         return {
-            "mode": "Opzione B (Analisi Semantica)",
-            "plagiarism_score": -1,
-            "score": -1,
+            "mode": "Opzione B",
+            "plagiarism_score": 0,
+            "score": 0,
             "risk_level": "Errore",
-            "summary_eval": "Manca la variabile GEMINI_API_KEY su Render.",
+            "summary_eval": "ERRORE: La variabile GEMINI_API_KEY non è impostata su Render.",
             "critical_passages": []
         }
 
     all_paragraphs = [p.strip() for p in full_text.split("\n") if len(p.strip().split()) >= 10]
-
     if not all_paragraphs:
         return {
-            "mode": "Opzione B (Analisi Semantica)",
+            "mode": "Opzione B",
             "plagiarism_score": 0,
             "score": 0,
             "risk_level": "Basso",
-            "summary_eval": "Il testo contiene solo titoli o frasi troppo brevi per essere analizzate.",
+            "summary_eval": "Testo troppo breve.",
             "critical_passages": []
         }
 
-    sample_paragraphs = all_paragraphs[:12]
+    sample_paragraphs = all_paragraphs[:10]
     text_sample = "\n---\n".join(sample_paragraphs).replace('"', "'")
 
     prompt = f"""
-    Sei un revisore accademico esperto ed equo. Analizza i seguenti paragrafi tratti da una tesi:
-
+    Sei un revisore accademico. Analizza i seguenti paragrafi:
     {text_sample}
 
-    REGOLE TASSATIVE:
-    1. Segnala SOLO i paragrafi che mostrano evidenze schiaccianti di testo generato da IA (stile ChatGPT meccanico, vuoto e generico) o plagio integrale.
-    2. IGNORA DEL TUTTO titoli, sottotitoli, intestazioni o formule introduttive formali accademiche.
-    3. Se un paragrafo è normale testo accademico umano, NON inserirlo nei passaggi critici.
-
-    Rispondi ESCLUSIVAMENTE con un JSON con la seguente struttura:
+    Rispondi SOLO in formato JSON:
     {{
-        "summary_eval": "<Sintesi concisa ed obiettiva dell'analisi in italiano>",
+        "summary_eval": "<sintesi>",
         "critical_passages": [
             {{
-                "original_text": "<estratto esatto del solo paragrafo/frase realmente critico>",
+                "original_text": "<testo>",
                 "type": "Sospetto IA",
-                "issue": "<spiegazione del motivo del rischio>",
-                "rewritten_suggestion": "<proposta di riscrittura accademica>"
+                "issue": "<motivo>",
+                "rewritten_suggestion": "<riscrittura>"
             }}
         ]
     }}
     """
 
-    # Proviamo sia con gemini-2.0-flash che con gemini-1.5-flash
-    models_to_try = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
-    ]
-
-    response_data = None
-    last_error_msg = ""
-
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key.strip()}"
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "response_mime_type": "application/json",
-                "temperature": 0.1
-            }
+    # Endpoint REST diretto senza SDK
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "response_mime_type": "application/json",
+            "temperature": 0.1
         }
-
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=25)
-            if res.status_code == 200:
-                response_data = res.json()
-                break
-            else:
-                last_error_msg = f"HTTP {res.status_code}: {res.text[:120]}"
-        except Exception as err:
-            last_error_msg = str(err)
-
-    if not response_data:
-        return {
-            "mode": "Opzione B (Analisi Semantica - Errore API)",
-            "plagiarism_score": -1,
-            "score": -1,
-            "risk_level": "Errore API",
-            "summary_eval": f"Errore Google Gemini: {last_error_msg}",
-            "critical_passages": []
-        }
+    }
 
     try:
-        raw_text = response_data["candidates"][0]["content"]["parts"][0]["text"]
+        res = requests.post(url, json=payload, timeout=20)
+        
+        # Se la risposta NON è HTTP 200 OK, mostriamo subito cosa dice Google
+        if res.status_code != 200:
+            return {
+                "mode": "Opzione B",
+                "plagiarism_score": 0,
+                "score": 0,
+                "risk_level": "Errore API",
+                "summary_eval": f"Errore da Google (HTTP {res.status_code}): {res.text}",
+                "critical_passages": []
+            }
+
+        res_data = res.json()
+        raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
         result = json.loads(raw_text)
 
         critical = result.get("critical_passages", [])
@@ -210,31 +182,25 @@ async def analyze_option_b(file: UploadFile = File(...)):
             critical = []
 
         num_critical = len(critical)
-        total_analyzed = len(sample_paragraphs)
-        calculated_score = min(100, round((num_critical / total_analyzed) * 100))
+        calculated_score = min(100, round((num_critical / len(sample_paragraphs)) * 100))
         
-        if calculated_score <= 20:
-            risk = "Basso"
-        elif calculated_score <= 50:
-            risk = "Medio"
-        else:
-            risk = "Alto"
+        risk = "Basso" if calculated_score <= 20 else ("Medio" if calculated_score <= 50 else "Alto")
 
         return {
-            "mode": "Opzione B (Analisi Semantica con Gemini)",
+            "mode": "Opzione B (Gemini API)",
             "plagiarism_score": calculated_score,
             "score": calculated_score,
             "risk_level": risk,
-            "summary_eval": result.get("summary_eval", "Analisi completata con successo."),
+            "summary_eval": result.get("summary_eval", "Analisi completata."),
             "critical_passages": critical
         }
 
-    except Exception as parse_err:
+    except Exception as e:
         return {
-            "mode": "Opzione B (Analisi Semantica - Errore Parsing)",
-            "plagiarism_score": -1,
-            "score": -1,
-            "risk_level": "Errore",
-            "summary_eval": f"Errore lettura JSON: {str(parse_err)}",
+            "mode": "Opzione B",
+            "plagiarism_score": 0,
+            "score": 0,
+            "risk_level": "Errore Python",
+            "summary_eval": f"Errore interno Python: {str(e)}",
             "critical_passages": []
         }
