@@ -84,7 +84,7 @@ async def analyze_option_a(file: UploadFile = File(...)):
     }
 
 # ==========================================
-# OPZIONE B: Analisi Semantica, AI e Suggerimenti di Riscrittura
+# OPZIONE B: Analisi Semantica Completa (Plagio IA, Parafrasi & Stile)
 # ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
@@ -94,32 +94,36 @@ async def analyze_option_b(file: UploadFile = File(...)):
     text_sample = full_text[:4000]
 
     prompt = f"""
-    Sei un docente universitario e revisore accademico rigoroso.
-    Analizza il seguente estratto di tesi di laurea:
+    Sei un docente universitario e revisore accademico di massima esperienza.
+    Analizza il seguente estratto di una tesi di laurea:
 
     \"\"\"
     {text_sample}
     \"\"\"
 
-    ISTRUZIONI OBBLIGATORIE:
-    1. Ignora totalmente intestazioni, indici, titoli dei capitoli (es. Capitolo 1, 1.1) e note a piè di pagina.
-    2. Calcola uno score complessivo di rischio plagio/IA (da 0 a 100).
-    3. SELEZIONA OBBLIGATORIAMENTE da 2 a 4 passaggi del testo che presentano criticità (frasi scritte da IA, sintassi debole, ripetizioni o parafrasi da migliorare) e fornisci per ciascuno un SUGGERIMENTO DI RISCRITTURA ACCADEMICA ad alto livello.
+    ISTRUZIONI DI ANALISI RIGOROSE:
+    1. IGNORA STRUTTURA E FORMA: Non considerare mai errori o rischi la presenza di titoli di capitoli, numerazioni (es. 1.1, Capitolo 2), note bibliografiche o indice. È la normale struttura di una tesi.
+    2. RILEVAZIONE PLAGIO IA: Cerca costrutti artificiali tipici dei modelli LLM (ChatGPT/Claude), come connettivi meccanici ("È importante sottolineare che", "In sintesi"), tono eccessivamente neutro o privo di analisi critica.
+    3. RILEVAZIONE PARAFRASI/PLAGIO SEMANTICO: Identifica periodi che sembrano tradotti o rielaborati superficialmente per mascherare una fonte originale.
+    4. REVISIONE SINTATTICO-STILISTICA: Individua frasi con sintassi debole, ripetizioni o registro non adeguatamente accademico.
+    5. SELEZIONA OBBLIGATORIAMENTE da 2 a 5 passaggi critici e proponi per ciascuno una riscrittura accademica formale.
 
     Rispondi ESCLUSIVAMENTE con un JSON che rispetti questo formato esatto:
     {{
-        "plagiarism_score": 15,
+        "plagiarism_score": 20,
+        "ai_generated_probability": 15,
         "risk_level": "Basso",
-        "summary_eval": "Giudizio complessivo formale sul testo...",
+        "summary_eval": "Valutazione sintetica complessiva su stile, originalità e potenziale uso di IA...",
         "critical_passages": [
             {{
                 "original_text": "citazione esatta del passaggio dalla tesi",
-                "type": "Miglioramento Stilistico",
-                "issue": "spiegazione del perché la frase è debole o a rischio",
-                "rewritten_suggestion": "proposta di riscrittura in perfetto stile accademico"
+                "type": "Sospetto IA",
+                "issue": "spiegazione del perché il passaggio sembra generato da IA, parafrasato o debole stilisticamente",
+                "rewritten_suggestion": "proposta di riscrittura rigorosa in perfetto stile accademico"
             }}
         ]
     }}
+    Nota per il campo 'type': usa solo una tra queste diciture: 'Sospetto IA', 'Parafrasi Superficiale', 'Debolezza Sintattica' o 'Stile da Migliorare'.
     """
 
     url = "https://text.pollinations.ai/"
@@ -127,7 +131,7 @@ async def analyze_option_b(file: UploadFile = File(...)):
         "messages": [
             {
                 "role": "system", 
-                "content": "Sei un revisore accademico. Rispondi SEMPRE ed ESCLUSIVAMENTE con un JSON valido fornendo sia lo score che i suggerimenti di riscrittura."
+                "content": "Sei un revisore accademico. Rispondi SEMPRE ed ESCLUSIVAMENTE con un JSON valido fornendo score, analisi IA e suggerimenti di riscrittura."
             },
             {"role": "user", "content": prompt}
         ],
@@ -139,19 +143,19 @@ async def analyze_option_b(file: UploadFile = File(...)):
         response = requests.post(url, json=payload, timeout=60)
         response_text = response.text.strip()
 
-        # Pulizia rigida del JSON
+        # Pulizia rigida del JSON da eventuale sintassi markdown
         clean_json = re.sub(r"^```json\s*", "", response_text, flags=re.MULTILINE)
         clean_json = re.sub(r"^```\s*", "", clean_json, flags=re.MULTILINE)
         clean_json = re.sub(r"```$", "", clean_json, flags=re.MULTILINE).strip()
 
         result = json.loads(clean_json)
         
-        # Mappatura sicura per il frontend
+        # Estrazione sicura del punteggio per il frontend
         score_val = result.get("plagiarism_score", result.get("score", result.get("ai_generated_probability", 0)))
         
         result["plagiarism_score"] = score_val
         result["score"] = score_val
-        result["mode"] = "Opzione B (Analisi Semantica AI - Llama)"
+        result["mode"] = "Opzione B (Analisi Semantica, IA & Stile - Llama)"
         
         if "critical_passages" not in result or not isinstance(result["critical_passages"], list):
             result["critical_passages"] = []
@@ -160,10 +164,10 @@ async def analyze_option_b(file: UploadFile = File(...)):
 
     except Exception as e:
         return {
-            "mode": "Opzione B (Analisi Semantica AI - Llama)",
+            "mode": "Opzione B (Analisi Semantica, IA & Stile - Llama)",
             "plagiarism_score": 0,
             "score": 0,
             "risk_level": "Basso",
-            "summary_eval": "Errore durante l'elaborazione dei suggerimenti.",
+            "summary_eval": "Errore durante l'elaborazione dell'analisi semantica.",
             "critical_passages": []
         }
