@@ -1,12 +1,13 @@
 import os
 import io
 import json
+import re
 import docx
 import pypdf
+import requests
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from duckduckgo_search import DDGS
-from google import genai
 
 app = FastAPI(title="Real Anti-Plagiarism API")
 
@@ -18,8 +19,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 def extract_text(file_bytes: bytes, filename: str) -> str:
     text = ""
@@ -40,6 +39,9 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
 def read_root():
     return {"status": "online", "message": "Backend Antiplagio Attivo"}
 
+# ==========================================
+# OPZIONE A: Ricerca Reale Fonti Web (DuckDuckGo)
+# ==========================================
 @app.post("/analyze/search")
 async def analyze_option_a(file: UploadFile = File(...)):
     contents = await file.read()
@@ -79,15 +81,15 @@ async def analyze_option_a(file: UploadFile = File(...)):
         "matches": matches
     }
 
+# ==========================================
+# OPZIONE B: Analisi Semantica AI (Gratuita / No Key)
+# ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
-    if not GEMINI_API_KEY:
-        raise HTTPException(status_code=500, detail="Chiave GEMINI_API_KEY non configurata su Render.")
-
     contents = await file.read()
     full_text = extract_text(contents, file.filename.lower())
     
-    text_sample = full_text[:8000]
+    text_sample = full_text[:4000]
 
     prompt = f"""
     Sei un revisore accademico esperto in anti-plagio e stile di tesi universitarie.
@@ -95,54 +97,42 @@ async def analyze_option_b(file: UploadFile = File(...)):
 
     "{text_sample}"
 
-    Fornisci una risposta JSON valida con la seguente struttura:
+    Fornisci UNA SOLA RISPOSTA in formato JSON valido, SENZA MARKDOWN, SENZA BLOCCHI CODE, usando questa struttura esatta:
     {{
-        "plagiarism_score": <numero da 0 a 100>,
-        "risk_level": "<Basso | Medio | Alto>",
+        "plagiarism_score": 15,
+        "risk_level": "Basso",
         "critical_passages": [
             {{
-                "original_text": "<frase sospetta o mal citata>",
-                "issue": "<motivo per cui è a rischio o sembra parafrasata>",
-                "rewritten_suggestion": "<versione riformulata in perfetto stile accademico>"
+                "original_text": "frase estratta",
+                "issue": "spiegazione del rischio",
+                "rewritten_suggestion": "suggerimento di riscrittura"
             }}
         ]
     }}
     """
 
+    # Endpoint AI pubblico e gratuito senza API Key
+    url = "https://text.pollinations.ai/"
+    payload = {
+        "messages": [
+            {"role": "system", "content": "Sei un'API che risponde esclusivamente in JSON valido, senza testo introduttivo o formattazione markdown."},
+            {"role": "user", "content": prompt}
+        ],
+        "jsonMode": True
+    }
+
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        # Prova prima con gemini-2.5-flash, in caso di errore passa a gemini-1.5-flash
-        models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash']
-        response = None
-        last_error = None
+        response = requests.post(url, json=payload, timeout=60)
+        response_text = response.text.strip()
 
-        for model_name in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
-                if response:
-                    break
-            except Exception as e:
-                last_error = e
-                continue
+        # Pulizia da eventuale markdown residuo
+        clean_json = re.sub(r"^```json\s*", "", response_text, flags=re.MULTILINE)
+        clean_json = re.sub(r"^```\s*", "", clean_json, flags=re.MULTILINE)
+        clean_json = re.sub(r"```$", "", clean_json, flags=re.MULTILINE).strip()
 
-        if not response:
-            raise HTTPException(status_code=500, detail=f"Errore chiamate modelli AI: {str(last_error)}")
-
-        clean_text = response.text.strip()
-        if clean_text.startswith("```json"):
-            clean_text = clean_text[7:]
-        if clean_text.startswith("```"):
-            clean_text = clean_text[3:]
-        if clean_text.endswith("```"):
-            clean_text = clean_text[:-3]
-
-        result = json.loads(clean_text.strip())
-        result["mode"] = "Opzione B (Analisi Semantica AI)"
+        result = json.loads(clean_json)
+        result["mode"] = "Opzione B (Analisi Semantica AI - Free)"
         return result
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore analisi AI: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Errore analisi AI gratuita: {str(e)}")
