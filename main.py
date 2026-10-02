@@ -107,20 +107,42 @@ async def analyze_option_b(file: UploadFile = File(...)):
             }}
         ]
     }}
-    Rispondi SOLO con il JSON valido senza blocchi di codice markdown.
     """
 
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
-        
-        clean_json = response.text.replace("```json", "").replace("```", "").strip()
-        result = json.loads(clean_json)
+        # Prova prima con gemini-2.5-flash, in caso di errore passa a gemini-1.5-flash
+        models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash']
+        response = None
+        last_error = None
+
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                if response:
+                    break
+            except Exception as e:
+                last_error = e
+                continue
+
+        if not response:
+            raise HTTPException(status_code=500, detail=f"Errore chiamate modelli AI: {str(last_error)}")
+
+        clean_text = response.text.strip()
+        if clean_text.startswith("```json"):
+            clean_text = clean_text[7:]
+        if clean_text.startswith("```"):
+            clean_text = clean_text[3:]
+        if clean_text.endswith("```"):
+            clean_text = clean_text[:-3]
+
+        result = json.loads(clean_text.strip())
         result["mode"] = "Opzione B (Analisi Semantica AI)"
         return result
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore analisi AI: {str(e)}")
