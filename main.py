@@ -1,89 +1,3 @@
-import os
-import io
-import json
-import re
-import docx
-import pypdf
-import requests
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from duckduckgo_search import DDGS
-
-app = FastAPI(title="Real Anti-Plagiarism API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-def extract_text(file_bytes: bytes, filename: str) -> str:
-    text = ""
-    try:
-        if filename.endswith(".docx"):
-            doc = docx.Document(io.BytesIO(file_bytes))
-            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-        elif filename.endswith(".pdf"):
-            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-            for page in reader.pages:
-                t = page.extract_text()
-                if t:
-                    text += t + "\n"
-        else:
-            raise HTTPException(status_code=400, detail="Formato non supportato. Carica un file PDF o DOCX.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Errore nella lettura del file: {str(e)}")
-    return text.strip()
-
-@app.get("/")
-def read_root():
-    return {"status": "online", "message": "Backend Antiplagio Attivo e Operativo"}
-
-# ==========================================
-# OPZIONE A: Ricerca Reale Fonti Web (DuckDuckGo)
-# ==========================================
-@app.post("/analyze/search")
-async def analyze_option_a(file: UploadFile = File(...)):
-    contents = await file.read()
-    full_text = extract_text(contents, file.filename.lower())
-    
-    paragraphs = [p.strip() for p in full_text.split("\n") if len(p.split()) >= 10]
-    if not paragraphs:
-        return {"error": "Testo insufficiente per effettuare l'analisi."}
-
-    matches = []
-    ddgs = DDGS()
-    sample_paragraphs = paragraphs[:15]
-
-    for p in sample_paragraphs:
-        words = p.split()[:12]
-        query = f'"{" ".join(words)}"'
-        
-        try:
-            results = list(ddgs.text(query, max_results=1))
-            if results:
-                matches.append({
-                    "excerpt": p[:150] + "...",
-                    "matched_text": words,
-                    "source_title": results[0].get("title", "Fonte Web"),
-                    "source_url": results[0].get("href", "")
-                })
-        except Exception:
-            continue
-
-    plagiarism_score = min(100, round((len(matches) / len(sample_paragraphs)) * 100, 1))
-
-    return {
-        "mode": "Opzione A (Ricerca Reale Web)",
-        "filename": file.filename,
-        "total_paragraphs_analyzed": len(sample_paragraphs),
-        "plagiarism_score": plagiarism_score,
-        "score": plagiarism_score,
-        "matches": matches
-    }
-
 # ==========================================
 # OPZIONE B: Analisi Semantica Completa (Valutazione Reale)
 # ==========================================
@@ -95,33 +9,29 @@ async def analyze_option_b(file: UploadFile = File(...)):
     if not full_text:
         raise HTTPException(status_code=400, detail="Impossibile estrarre testo dal file.")
 
-    text_sample = full_text[:4000].replace('"', "'").replace("\n", " ")
+    # Pulizia profonda per evitare che i caratteri speciali rompano la richiesta JSON
+    text_sample = full_text[:4000].replace('"', "'").replace("\n", " ").replace("\\", "")
 
-    # Prompt analitico e oggettivo basato sulla proporzione delle frasi sospette
-    prompt = f"""
-    Sei uno strumento di analisi sintattica e semantica per tesi di laurea.
-    Analizza il seguente testo:
-    
-    "{text_sample}"
+    # Prompt estremamente esplicito: forniamo un ESEMPIO con numeri reali, non con i simboli < >
+    prompt = f"""Analizza questo testo e valuta la probabilità che sia generato da IA o plagiato.
+    Testo: "{text_sample}"
 
-    Esegui questa procedura oggettiva:
-    1. Conta quanti periodi/frasi compongono il testo.
-    2. Identifica quanti di questi periodi mostrano:
-       - Definizione enciclopedica o copiata senza citazione.
-       - Pattern di scrittura tipici degli LLM (es. "Nel vasto panorama", "È di fondamentale importanza", "In conclusione risulta evidente").
-    3. Calcola il 'plagiarism_score' come percentuale REALE delle frasi compromesse rispetto al totale (es. se 8 frasi su 10 sono generate/copiate, il punteggio deve essere 80).
+    REGOLE DI VALUTAZIONE (Sii severo):
+    1. Se noti uno stile robotico, frasi fatte tipiche delle IA (es. "Nel vasto panorama", "È fondamentale ricordare", "In sintesi") o testo puramente enciclopedico, il punteggio DEVE essere tra 75 e 100.
+    2. Se il testo è originale, con argomentazioni personali e fonti citate correttamente, il punteggio deve essere tra 0 e 25.
 
-    Rispondi ESCLUSIVAMENTE con un JSON valido in questo formato esatto:
+    Devi rispondere SOLO ed ESCLUSIVAMENTE con un oggetto JSON valido. Nessun testo introduttivo o conclusivo.
+    Usa ESATTAMENTE questo formato (assicurati che plagiarism_score sia un NUMERO intero, non una stringa):
     {{
-        "plagiarism_score": <numero da 0 a 100 calcolato proporzionalmente>,
-        "risk_level": "<Basso | Medio | Alto>",
-        "summary_eval": "<Sintesi oggettiva della valutazione>",
+        "plagiarism_score": 85,
+        "risk_level": "Alto",
+        "summary_eval": "Motivazione sintetica del punteggio assegnato...",
         "critical_passages": [
             {{
-                "original_text": "<frase esatta dal testo>",
+                "original_text": "Inserisci qui una frase esatta presa dal testo che risulta sospetta",
                 "type": "Sospetto IA",
-                "issue": "<motivo per cui la frase è critica>",
-                "rewritten_suggestion": "<proposta di riscrittura accademica>"
+                "issue": "Spiega perché questa frase sembra generata da IA o plagiata",
+                "rewritten_suggestion": "Scrivi una proposta di miglioramento in stile accademico"
             }}
         ]
     }}
@@ -130,23 +40,36 @@ async def analyze_option_b(file: UploadFile = File(...)):
     url = "https://text.pollinations.ai/"
     payload = {
         "messages": [
-            {"role": "system", "content": "Sei un analista testuale accademico. Calcola la percentuale in modo matematico e rispondi SOLO col JSON richiesto."},
+            {"role": "system", "content": "Sei un'API che restituisce ESCLUSIVAMENTE codice JSON valido. Non usare formattazione markdown (```json). Restituisci solo l'oggetto tra parentesi graffe."},
             {"role": "user", "content": prompt}
         ],
         "model": "openai",
+        "jsonMode": True, # Forza il modello a validare il JSON (se supportato)
         "seed": 42
     }
 
     try:
         response = requests.post(url, json=payload, timeout=45)
+        response.raise_for_status() # Lancia errore se il server remoto non risponde con 200 OK
         response_text = response.text.strip()
 
-        match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        clean_json = match.group(0) if match else response_text
+        # Estrazione JSON infallibile (cerca la prima { e l'ultima })
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        
+        if start_idx != -1 and end_idx != -1:
+            clean_json = response_text[start_idx:end_idx+1]
+        else:
+            clean_json = response_text
 
         result = json.loads(clean_json)
         
-        score_val = result.get("plagiarism_score", 0)
+        # Ci assicuriamo che lo score sia un intero valido, anche se l'AI dovesse restituire una stringa
+        raw_score = result.get("plagiarism_score", 0)
+        try:
+            score_val = int(raw_score)
+        except ValueError:
+            score_val = 50 # Se l'AI ha scritto testo, assegniamo un 50% di default per sicurezza
         
         result["plagiarism_score"] = score_val
         result["score"] = score_val
@@ -159,11 +82,12 @@ async def analyze_option_b(file: UploadFile = File(...)):
 
     except Exception as e:
         print(f"Errore chiamata AI: {e}")
+        # In caso di errore API non diamo più 0 (che illude l'utente), ma restituiamo un errore gestibile
         return {
             "mode": "Opzione B (Analisi Semantica & IA - Errore API)",
-            "plagiarism_score": 0,
-            "score": 0,
+            "plagiarism_score": -1, 
+            "score": -1,
             "risk_level": "Errore",
-            "summary_eval": "Si è verificato un errore durante la connessione con il motore AI. Riprova tra poco.",
+            "summary_eval": f"Errore di connessione con il motore IA gratuito. Dettaglio: {str(e)[:50]}...",
             "critical_passages": []
         }
