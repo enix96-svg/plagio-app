@@ -1,66 +1,124 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Test Box Antiplagio</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-900 text-slate-100 p-6 font-sans">
-    <div class="max-w-md mx-auto bg-slate-800 p-6 rounded-2xl border border-slate-700 space-y-4">
-        <h2 class="text-lg font-bold text-indigo-400">🧪 Box di Test Integrato</h2>
-        <p class="text-xs text-slate-400">Verifica l'estrazione testo e la connessione API prima di andare in produzione.</p>
+import os
+import io
+import docx
+import pypdf
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from duckduckgo_search import DDGS
+import google.generativeai as genai
+
+app = FastAPI(title="Real Anti-Plagiarism API")
+
+# Abilita CORS per permettere le chiamate dal frontend Netlify
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Configura l'API Key per l'Opzione B (Gemini AI - Gratuita su Google AI Studio)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "INSERISCI_LA_TUA_GEMINI_KEY_QUI")
+if GEMINI_API_KEY != "INSERISCI_LA_TUA_GEMINI_KEY_QUI":
+    genai.configure(api_key=GEMINI_API_KEY)
+
+def extract_text(file_bytes: bytes, filename: str) -> str:
+    """Estrae il testo puro da file .docx o .pdf"""
+    text = ""
+    if filename.endswith(".docx"):
+        doc = docx.Document(io.BytesIO(file_bytes))
+        text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    elif filename.endswith(".pdf"):
+        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text += t + "\n"
+    else:
+        raise HTTPException(status_code=400, detail="Formato non supportato. Usa PDF o DOCX.")
+    return text
+
+# ==========================================
+# OPZIONE A: Ricerca Reale sul Web (DuckDuckGo)
+# ==========================================
+@app.post("/analyze/search")
+async def analyze_option_a(file: UploadFile = File(...)):
+    contents = await file.read()
+    full_text = extract_text(contents, file.filename.lower())
+    
+    paragraphs = [p.strip() for p in full_text.split("\n") if len(p.split()) >= 10]
+    if not paragraphs:
+        return {"error": "Testo insufficiente per l'analisi."}
+
+    matches = []
+    ddgs = DDGS()
+    sample_paragraphs = paragraphs[:15] 
+
+    for p in sample_paragraphs:
+        words = p.split()[:12]
+        query = f'"{" ".join(words)}"'
         
-        <div>
-            <label class="block text-xs font-semibold mb-1">1. Inserisci un testo di prova:</label>
-            <textarea id="testText" rows="3" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-200" placeholder="Incolla un paragrafo della tesi qui..."></textarea>
-        </div>
+        try:
+            results = list(ddgs.text(query, max_results=1))
+            if results:
+                matches.append({
+                    "excerpt": p[:150] + "...",
+                    "matched_text": words,
+                    "source_title": results[0].get("title", "Fonte Web"),
+                    "source_url": results[0].get("href", "")
+                })
+        except Exception:
+            continue
 
-        <div>
-            <label class="block text-xs font-semibold mb-1">2. Endpoint Backend (Render/Python):</label>
-            <input type="text" id="endpointUrl" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-200" value="http://localhost:8000/analyze/search">
-        </div>
+    plagiarism_score = min(100, round((len(matches) / len(sample_paragraphs)) * 100, 1))
 
-        <button onclick="runTest()" id="btnTest" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 rounded-xl text-xs">
-            Esegui Test di Connessione
-        </button>
+    return {
+        "mode": "Opzione A (Ricerca Reale Web)",
+        "filename": file.filename,
+        "total_paragraphs_analyzed": len(sample_paragraphs),
+        "plagiarism_score": plagiarism_score,
+        "matches": matches
+    }
 
-        <div id="testOutput" class="hidden text-xs bg-slate-900 p-3 rounded-xl border border-slate-700 font-mono text-emerald-400 whitespace-pre-wrap"></div>
-    </div>
+# ==========================================
+# OPZIONE B: Analisi Semantica e Parafrasi con AI
+# ==========================================
+@app.post("/analyze/ai")
+async def analyze_option_b(file: UploadFile = File(...)):
+    contents = await file.read()
+    full_text = extract_text(contents, file.filename.lower())
+    
+    text_sample = full_text[:8000]
 
-    <script>
-        async function runTest() {
-            const text = document.getElementById('testText').value;
-            const url = document.getElementById('endpointUrl').value;
-            const output = document.getElementById('testOutput');
-            const btn = document.getElementById('btnTest');
+    prompt = f"""
+    Sei un revisore accademico esperto in anti-plagio e stile di tesi universitarie.
+    Analizza il seguente estratto di tesi:
 
-            if (!text) { alert("Inserisci prima del testo nel box!"); return; }
+    "{text_sample}"
 
-            btn.disabled = true;
-            btn.innerText = "Invio in corso...";
-            output.classList.add('hidden');
+    Fornisci una risposta JSON valida con la seguente struttura:
+    {{
+        "plagiarism_score": <numero da 0 a 100>,
+        "risk_level": "<Basso | Medio | Alto>",
+        "critical_passages": [
+            {{
+                "original_text": "<frase sospetta o mal citata>",
+                "issue": "<motivo per cui è a rischio o sembra parafrasata>",
+                "rewritten_suggestion": "<versione riformulata in perfetto stile accademico>"
+            }}
+        ]
+    }}
+    Rispondi SOLO con il JSON valido.
+    """
 
-            try {
-                // Simula l'invio come file per testare la compatibilità dell'API
-                const blob = new Blob([text], { type: 'text/plain' });
-                const formData = new FormData();
-                formData.append("file", blob, "test_doc.docx");
-
-                const res = await fetch(url, { method: 'POST', body: formData });
-                const data = await res.json();
-                
-                output.innerText = JSON.stringify(data, null, 2);
-                output.classList.remove('hidden');
-            } catch (err) {
-                output.innerText = "❌ Errore di connessione:\n" + err.message;
-                output.classList.remove('hidden');
-                output.className = output.className.replace('text-emerald-400', 'text-rose-400');
-            } finally {
-                btn.disabled = false;
-                btn.innerText = "Esegui Test di Connessione";
-            }
-        }
-    </script>
-</body>
-</html>
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        clean_json = response.text.replace("```json", "").replace("```", "").strip()
+        import json
+        result = json.loads(clean_json)
+        result["mode"] = "Opzione B (Analisi Semantica AI)"
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Errore analisi AI: {str(e)}")
