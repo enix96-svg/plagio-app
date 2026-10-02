@@ -20,7 +20,7 @@ app.add_middleware(
 )
 
 def extract_clean_text(file_bytes: bytes, filename: str) -> str:
-    """Estrae il testo ed elimina Indice, Sommario e numeri di pagina per evitare falsi positivi."""
+    """Estrae il testo ed elimina Indici/Sommari per evitare falsi positivi."""
     raw_text = ""
     try:
         if filename.endswith(".docx"):
@@ -37,7 +37,6 @@ def extract_clean_text(file_bytes: bytes, filename: str) -> str:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Errore nella lettura del file: {str(e)}")
 
-    # FILTRAGGIO ANTI-INDICE / SOMMARIO:
     lines = raw_text.split("\n")
     filtered_lines = []
     
@@ -45,8 +44,7 @@ def extract_clean_text(file_bytes: bytes, filename: str) -> str:
         l = line.strip()
         if not l:
             continue
-        
-        # Ignora righe dell'indice (es. con sequenze di punti "..... 7" o parole chiave da sommario)
+        # Ignora righe dell'indice (punti sospensivi con numeri di pagina o parole chiave)
         if re.search(r'\.{2,}\s*\d+', l) or re.search(r'\.{4,}', l):
             continue
         if l.lower() in ["indice", "sommario", "table of contents", "executive summary"]:
@@ -54,8 +52,7 @@ def extract_clean_text(file_bytes: bytes, filename: str) -> str:
             
         filtered_lines.append(l)
 
-    cleaned_text = "\n".join(filtered_lines)
-    return cleaned_text.strip()
+    return "\n".join(filtered_lines).strip()
 
 @app.get("/")
 def read_root():
@@ -105,7 +102,7 @@ async def analyze_option_a(file: UploadFile = File(...)):
     }
 
 # ==========================================
-# OPZIONE B: Rilevamento Plagio Semantico & Scrittura IA (Senza Falsi Positivi su Indici)
+# OPZIONE B: Analisi Semantica Gratis con ChatGPT (via Pollinations) + Matematica in Python
 # ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
@@ -113,51 +110,57 @@ async def analyze_option_b(file: UploadFile = File(...)):
     full_text = extract_clean_text(contents, file.filename.lower())
     
     if not full_text:
-        raise HTTPException(status_code=400, detail="Impossibile estrarre testo valido dal file.")
+        raise HTTPException(status_code=400, detail="Impossibile estrarre testo dal file.")
 
-    # Prendiamo i primi 4000 caratteri di TESTO DISCORSIVO (escludendo gli indici puliti in precedenza)
-    text_sample = full_text[:4000].replace('"', "'").replace("\n", " ").replace("\\", "")
+    # Analizziamo solo paragrafi veri (almeno 10 parole, escludendo titoli isolati)
+    all_paragraphs = [p.strip() for p in full_text.split("\n") if len(p.strip().split()) >= 10]
+
+    if not all_paragraphs:
+        return {
+            "mode": "Opzione B (Analisi Semantica & IA)",
+            "plagiarism_score": 0,
+            "score": 0,
+            "risk_level": "Basso",
+            "summary_eval": "Il testo contiene solo titoli o frasi troppo brevi per valutare il rischio.",
+            "critical_passages": []
+        }
+
+    # Analizziamo fino a 10 paragrafi significativi
+    sample_paragraphs = all_paragraphs[:10]
+    text_sample = "\n---\n".join(sample_paragraphs).replace('"', "'")
 
     prompt = f"""
-    Sei uno strumento di analisi accademica per tesi di laurea.
-    Analizza ESCLUSIVAMENTE IL TESTO DISCORSIVO sottostante:
+    Sei un revisore accademico esperto ed equo. Analizza i seguenti paragrafi tratti da una tesi:
 
-    "{text_sample}"
+    {text_sample}
 
-    REGOLE TASSATIVE PER EVITARE FALSI POSITIVI:
-    1. IGNORA STRUTTURE ED INDICI: Ignora del tutto eventuali titoli, numerazioni di capitoli o residui di sommari. NON considerarli mai come "testo generato da IA" o "plagio".
-    2. VALUTA SOLO IL TESTO DISCORSIVO:
-       - Riconosci il registro accademico umano (termini formali, trattazioni di casi studio come TRM Stampi S.r.l., contesti aziendali o teorici).
-       - Penalizza SOLO ed ESCLUSIVAMENTE testo generico e vuoto tipico da ChatGPT (es: "Nel vasto panorama contemporaneo...", "È di fondamentale importanza notare che...") oppure definizioni di enciclopedia riprese parola per parola.
+    REGOLE TASSATIVE:
+    1. Segnala SOLO i paragrafi che mostrano evidenze schiaccianti di testo generato da IA (stile ChatGPT meccanico e generico) o plagio integrale.
+    2. IGNORA DEL TUTTO titoli, sottotitoli o formule introduttive formali accademiche.
+    3. Se un paragrafo è normale testo accademico umano, NON inserirlo nei passaggi critici.
 
-    CALCOLO DEL PUNTEGGIO REALE (0-100%):
-    - 0-20%: Testo accademico reale, specifico, contestualizzato e ben articolato.
-    - 21-50%: Stile leggermente generico ma autentico.
-    - 51-100%: Testo palesemente sintetico, vuoto, generato da bot o copiato senza rielaborazione.
-
-    Rispondi ESCLUSIVAMENTE con un oggetto JSON valido (nessun markdown, nessun testo di contorno):
+    Rispondi ESCLUSIVAMENTE con un JSON in questo formato esatto:
     {{
-        "plagiarism_score": <numero intero reale da 0 a 100>,
-        "risk_level": "<Basso | Medio | Alto>",
-        "summary_eval": "<Motivazione sintetica e contestualizzata>",
+        "summary_eval": "<Sintesi concisa ed obiettiva dell'analisi>",
         "critical_passages": [
             {{
-                "original_text": "<frase discorsiva realmente critica>",
-                "type": "<Sospetto IA | Plagio Semantico>",
-                "issue": "<spiegazione del perché la frase discorsiva è critica>",
-                "rewritten_suggestion": "<suggerimento di riscrittura accademica>"
+                "original_text": "<estratto esatto del solo paragrafo/frase realmente critico>",
+                "type": "Sospetto IA",
+                "issue": "<spiegazione del motivo del rischio>",
+                "rewritten_suggestion": "<proposta di riscrittura accademica>"
             }}
         ]
     }}
     """
 
+    # Endpoint Pollinations che sfrutta i modelli OpenAI senza API Key
     url = "https://text.pollinations.ai/"
     payload = {
         "messages": [
-            {"role": "system", "content": "Sei un analista testuale accademico imparziale. Rispondi ESCLUSIVAMENTE con il JSON richiesto."},
+            {"role": "system", "content": "Sei un analista testuale accademico. Rispondi ESCLUSIVAMENTE con il JSON richiesto."},
             {"role": "user", "content": prompt}
         ],
-        "model": "openai",
+        "model": "openai", # Chiama gratuitamente il motore ChatGPT
         "seed": 42
     }
 
@@ -176,16 +179,31 @@ async def analyze_option_b(file: UploadFile = File(...)):
 
         result = json.loads(clean_json)
         
-        score_val = int(result.get("plagiarism_score", 0))
-        
-        result["plagiarism_score"] = score_val
-        result["score"] = score_val
-        result["mode"] = "Opzione B (Analisi Semantica & IA)"
-        
-        if "critical_passages" not in result or not isinstance(result["critical_passages"], list):
-            result["critical_passages"] = []
+        critical = result.get("critical_passages", [])
+        if not isinstance(critical, list):
+            critical = []
 
-        return result
+        # CALCOLO MATEMATICO IN PYTHON (Garantisce la proporzionalità reale):
+        num_critical = len(critical)
+        total_analyzed = len(sample_paragraphs)
+        
+        calculated_score = min(100, round((num_critical / total_analyzed) * 100))
+        
+        if calculated_score <= 20:
+            risk = "Basso"
+        elif calculated_score <= 50:
+            risk = "Medio"
+        else:
+            risk = "Alto"
+
+        return {
+            "mode": "Opzione B (Analisi Semantica & IA)",
+            "plagiarism_score": calculated_score,
+            "score": calculated_score,
+            "risk_level": risk,
+            "summary_eval": result.get("summary_eval", "Analisi completata."),
+            "critical_passages": critical
+        }
 
     except Exception as e:
         print(f"Errore chiamata AI: {e}")
