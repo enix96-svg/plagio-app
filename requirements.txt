@@ -5,3 +5,4 @@ pypdf
 duckduckgo_search
 requests
 python-multipart
+google-generativeai
