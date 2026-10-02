@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import docx
 import pypdf
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -9,7 +10,7 @@ from google import genai
 
 app = FastAPI(title="Real Anti-Plagiarism API")
 
-# Configurazione CORS per comunicare con il frontend su Netlify
+# Configurazione CORS per comunicare con Netlify
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,11 +19,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Recupera la chiave API dalle variabili d'ambiente di Render
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 def extract_text(file_bytes: bytes, filename: str) -> str:
-    """Estrae il testo da file .docx o .pdf"""
     text = ""
     if filename.endswith(".docx"):
         doc = docx.Document(io.BytesIO(file_bytes))
@@ -41,9 +40,6 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
 def read_root():
     return {"status": "online", "message": "Backend Antiplagio Attivo"}
 
-# ==========================================
-# OPZIONE A: Ricerca Reale Fonti Web (DuckDuckGo)
-# ==========================================
 @app.post("/analyze/search")
 async def analyze_option_a(file: UploadFile = File(...)):
     contents = await file.read()
@@ -83,9 +79,6 @@ async def analyze_option_a(file: UploadFile = File(...)):
         "matches": matches
     }
 
-# ==========================================
-# OPZIONE B: Analisi Semantica e Parafrasi con AI (Gemini)
-# ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
     if not GEMINI_API_KEY:
@@ -121,12 +114,11 @@ async def analyze_option_b(file: UploadFile = File(...)):
         client = genai.Client(api_key=GEMINI_API_KEY)
         
         response = client.models.generate_content(
-            model='models/gemini-1.5-flash',
+            model='gemini-2.5-flash',
             contents=prompt,
         )
         
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
-        import json
         result = json.loads(clean_json)
         result["mode"] = "Opzione B (Analisi Semantica AI)"
         return result
