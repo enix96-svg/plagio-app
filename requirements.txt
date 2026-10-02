@@ -3,5 +3,5 @@ uvicorn
 python-docx
 pypdf
 duckduckgo_search
-google-generativeai
+google-genai
 python-multipart
