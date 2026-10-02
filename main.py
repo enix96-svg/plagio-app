@@ -11,7 +11,6 @@ from duckduckgo_search import DDGS
 
 app = FastAPI(title="Real Anti-Plagiarism API")
 
-# Abilita CORS per permettere le chiamate dal frontend (Netlify o locale)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,7 +20,6 @@ app.add_middleware(
 )
 
 def extract_text(file_bytes: bytes, filename: str) -> str:
-    """Estrae il testo pulito da file .docx o .pdf"""
     text = ""
     try:
         if filename.endswith(".docx"):
@@ -87,7 +85,7 @@ async def analyze_option_a(file: UploadFile = File(...)):
     }
 
 # ==========================================
-# OPZIONE B: Analisi Semantica Completa (Plagio IA, Parafrasi & Stile)
+# OPZIONE B: Analisi Semantica Completa (Valutazione Reale)
 # ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
@@ -97,31 +95,33 @@ async def analyze_option_b(file: UploadFile = File(...)):
     if not full_text:
         raise HTTPException(status_code=400, detail="Impossibile estrarre testo dal file.")
 
-    # Pulisce il testo e limita la lunghezza per l'API
-    text_sample = full_text[:3500].replace('"', "'").replace("\n", " ")
+    text_sample = full_text[:4000].replace('"', "'").replace("\n", " ")
 
+    # Prompt analitico e oggettivo basato sulla proporzione delle frasi sospette
     prompt = f"""
-    Sei un docente universitario e revisore accademico di massima esperienza.
-    Analizza questo estratto di tesi:
+    Sei uno strumento di analisi sintattica e semantica per tesi di laurea.
+    Analizza il seguente testo:
     
-    {text_sample}
+    "{text_sample}"
 
-    ISTRUZIONI RIGOROSE:
-    1. Calcola una percentuale di plagio/presenza di testo generato da AI (da 10 a 95). Non mettere 0 se ci sono frasi sospette o stile artificiale.
-    2. Seleziona da 2 a 4 passaggi critici del testo.
+    Esegui questa procedura oggettiva:
+    1. Conta quanti periodi/frasi compongono il testo.
+    2. Identifica quanti di questi periodi mostrano:
+       - Definizione enciclopedica o copiata senza citazione.
+       - Pattern di scrittura tipici degli LLM (es. "Nel vasto panorama", "È di fondamentale importanza", "In conclusione risulta evidente").
+    3. Calcola il 'plagiarism_score' come percentuale REALE delle frasi compromesse rispetto al totale (es. se 8 frasi su 10 sono generate/copiate, il punteggio deve essere 80).
 
-    Rispondi ESCLUSIVAMENTE con un JSON valido in questo formato esatto, senza aggiungere nessun altro testo o spiegazione:
+    Rispondi ESCLUSIVAMENTE con un JSON valido in questo formato esatto:
     {{
-        "plagiarism_score": 65,
-        "ai_generated_probability": 60,
-        "risk_level": "Alto",
-        "summary_eval": "Rilevati passaggi con stile sintetico e probabile parafrasi non citata.",
+        "plagiarism_score": <numero da 0 a 100 calcolato proporzionalmente>,
+        "risk_level": "<Basso | Medio | Alto>",
+        "summary_eval": "<Sintesi oggettiva della valutazione>",
         "critical_passages": [
             {{
-                "original_text": "stralcio di frase dal testo",
+                "original_text": "<frase esatta dal testo>",
                 "type": "Sospetto IA",
-                "issue": "Spiegazione del problema stilistico o di plagio",
-                "rewritten_suggestion": "Proposta di riscrittura accademica formale"
+                "issue": "<motivo per cui la frase è critica>",
+                "rewritten_suggestion": "<proposta di riscrittura accademica>"
             }}
         ]
     }}
@@ -130,7 +130,7 @@ async def analyze_option_b(file: UploadFile = File(...)):
     url = "https://text.pollinations.ai/"
     payload = {
         "messages": [
-            {"role": "system", "content": "Rispondi SOLO ed ESCLUSIVAMENTE con un oggetto JSON valido. Nessun testo prima o dopo."},
+            {"role": "system", "content": "Sei un analista testuale accademico. Calcola la percentuale in modo matematico e rispondi SOLO col JSON richiesto."},
             {"role": "user", "content": prompt}
         ],
         "model": "openai",
@@ -141,17 +141,12 @@ async def analyze_option_b(file: UploadFile = File(...)):
         response = requests.post(url, json=payload, timeout=45)
         response_text = response.text.strip()
 
-        # Pulizia tramite Regex per estrarre il blocco JSON anche se racchiuso in markdown
         match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if match:
-            clean_json = match.group(0)
-        else:
-            clean_json = response_text
+        clean_json = match.group(0) if match else response_text
 
         result = json.loads(clean_json)
         
-        # Estrazione sicura del punteggio
-        score_val = result.get("plagiarism_score", result.get("ai_generated_probability", 50))
+        score_val = result.get("plagiarism_score", 0)
         
         result["plagiarism_score"] = score_val
         result["score"] = score_val
@@ -163,21 +158,12 @@ async def analyze_option_b(file: UploadFile = File(...)):
         return result
 
     except Exception as e:
-        print(f"Errore durante la chiamata AI: {e}")
-        # Fallback di sicurezza in caso di errore di connessione con Pollinations
+        print(f"Errore chiamata AI: {e}")
         return {
-            "mode": "Opzione B (Analisi Semantica & IA - Fallback)",
-            "plagiarism_score": 55,
-            "score": 55,
-            "ai_generated_probability": 50,
-            "risk_level": "Medio",
-            "summary_eval": "Analisi completata: riscontrate strutture sintattiche tipiche di parafrasi o modelli generativi.",
-            "critical_passages": [
-                {
-                    "original_text": text_sample[:120] + "...",
-                    "type": "Sospetto IA",
-                    "issue": "Struttura del periodo rigida e priva di rielaborazione personale.",
-                    "rewritten_suggestion": "Si consiglia di contestualizzare il paragrafo inserendo riferimenti bibliografici espliciti."
-                }
-            ]
+            "mode": "Opzione B (Analisi Semantica & IA - Errore API)",
+            "plagiarism_score": 0,
+            "score": 0,
+            "risk_level": "Errore",
+            "summary_eval": "Si è verificato un errore durante la connessione con il motore AI. Riprova tra poco.",
+            "critical_passages": []
         }
