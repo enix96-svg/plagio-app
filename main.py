@@ -5,11 +5,11 @@ import pypdf
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from duckduckgo_search import DDGS
-import google.generativeai as genai
+from google import genai
 
 app = FastAPI(title="Real Anti-Plagiarism API")
 
-# Abilita CORS per permettere le chiamate dal frontend Netlify
+# Configurazione CORS per comunicare con il frontend su Netlify
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,13 +18,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configura l'API Key per l'Opzione B (Gemini AI - Gratuita su Google AI Studio)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "INSERISCI_LA_TUA_GEMINI_KEY_QUI")
-if GEMINI_API_KEY != "INSERISCI_LA_TUA_GEMINI_KEY_QUI":
-    genai.configure(api_key=GEMINI_API_KEY)
+# Recupera la chiave API dalle variabili d'ambiente di Render
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 def extract_text(file_bytes: bytes, filename: str) -> str:
-    """Estrae il testo puro da file .docx o .pdf"""
+    """Estrae il testo da file .docx o .pdf"""
     text = ""
     if filename.endswith(".docx"):
         doc = docx.Document(io.BytesIO(file_bytes))
@@ -39,8 +37,12 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
         raise HTTPException(status_code=400, detail="Formato non supportato. Usa PDF o DOCX.")
     return text
 
+@app.get("/")
+def read_root():
+    return {"status": "online", "message": "Backend Antiplagio Attivo"}
+
 # ==========================================
-# OPZIONE A: Ricerca Reale sul Web (DuckDuckGo)
+# OPZIONE A: Ricerca Reale Fonti Web (DuckDuckGo)
 # ==========================================
 @app.post("/analyze/search")
 async def analyze_option_a(file: UploadFile = File(...)):
@@ -82,10 +84,13 @@ async def analyze_option_a(file: UploadFile = File(...)):
     }
 
 # ==========================================
-# OPZIONE B: Analisi Semantica e Parafrasi con AI
+# OPZIONE B: Analisi Semantica e Parafrasi con AI (Gemini)
 # ==========================================
 @app.post("/analyze/ai")
 async def analyze_option_b(file: UploadFile = File(...)):
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Chiave GEMINI_API_KEY non configurata su Render.")
+
     contents = await file.read()
     full_text = extract_text(contents, file.filename.lower())
     
@@ -109,12 +114,17 @@ async def analyze_option_b(file: UploadFile = File(...)):
             }}
         ]
     }}
-    Rispondi SOLO con il JSON valido.
+    Rispondi SOLO con il JSON valido senza blocchi di codice markdown.
     """
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        
+        response = client.models.generate_content(
+            model='models/gemini-1.5-flash',
+            contents=prompt,
+        )
+        
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
         import json
         result = json.loads(clean_json)
